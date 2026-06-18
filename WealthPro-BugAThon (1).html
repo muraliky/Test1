@@ -1,132 +1,56 @@
-package com.yourpackage.word;
+import { spawnSync } from "child_process";
+import path from "path";
+import fs from "fs";
 
-import org.apache.poi.util.Units;
-import org.apache.poi.xwpf.usermodel.*;
+const BAT_FILE_PATH = path.resolve(__dirname, "../../captureScreenshots.bat");
+const BASE_OUTPUT_DIR = path.resolve(__dirname, "../../test-results/screenshots");
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-
-public class WordScreenshotWriter {
-
-    private final XWPFDocument document;
-    private final String outputDocxPath;
-
-    // Target display size for every screenshot, in pixels.
-    // Tune to whatever fits your report layout / page width.
-    private static final int TARGET_WIDTH_PX = 500;
-    private static final int TARGET_HEIGHT_PX = 340;
-
-    public WordScreenshotWriter(String outputDocxPath, String reportTitle) {
-        this.outputDocxPath = outputDocxPath;
-        this.document = new XWPFDocument();
-
-        XWPFParagraph titlePara = document.createParagraph();
-        titlePara.setAlignment(ParagraphAlignment.CENTER);
-        XWPFRun titleRun = titlePara.createRun();
-        titleRun.setText(reportTitle);
-        titleRun.setBold(true);
-        titleRun.setFontSize(18);
-    }
-
-    /**
-     * Adds a heading with the screen name, followed by the embedded
-     * screenshot scaled to fit within the target box.
-     */
-    public void addScreenshotSection(String screenName, String imagePath) throws IOException {
-        // Section heading
-        XWPFParagraph heading = document.createParagraph();
-        heading.setSpacingBefore(300);
-        XWPFRun headingRun = heading.createRun();
-        headingRun.setText(screenName);
-        headingRun.setBold(true);
-        headingRun.setFontSize(14);
-
-        // Read real dimensions so we scale proportionally, not distorted
-        BufferedImage original = ImageIO.read(new File(imagePath));
-        double scale = computeScaleToFit(original.getWidth(), original.getHeight());
-        int scaledWidthPx = (int) (original.getWidth() * scale);
-        int scaledHeightPx = (int) (original.getHeight() * scale);
-
-        // Image paragraph
-        XWPFParagraph imgPara = document.createParagraph();
-        imgPara.setAlignment(ParagraphAlignment.CENTER);
-        XWPFRun imgRun = imgPara.createRun();
-
-        try (FileInputStream imgStream = new FileInputStream(imagePath)) {
-            imgRun.addPicture(
-                    imgStream,
-                    XWPFDocument.PICTURE_TYPE_PNG,
-                    imagePath,
-                    Units.toEMU(scaledWidthPx),
-                    Units.toEMU(scaledHeightPx)
-            );
-        } catch (org.apache.poi.openxml4j.exceptions.InvalidFormatException e) {
-            throw new IOException("Invalid image format for " + imagePath, e);
-        }
-    }
-
-    private double computeScaleToFit(int originalWidthPx, int originalHeightPx) {
-        double widthScale = (double) TARGET_WIDTH_PX / originalWidthPx;
-        double heightScale = (double) TARGET_HEIGHT_PX / originalHeightPx;
-        return Math.min(widthScale, heightScale); // preserve aspect ratio
-    }
-
-    public void save() throws IOException {
-        try (FileOutputStream fos = new FileOutputStream(outputDocxPath)) {
-            document.write(fos);
-        }
-        document.close();
-        System.out.println("[Java] Word document saved: " + outputDocxPath);
-    }
+function generateRunTimestamp(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+         `_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
 }
 
+const RUN_TIMESTAMP = generateRunTimestamp();
+const RUN_OUTPUT_DIR = path.join(BASE_OUTPUT_DIR, RUN_TIMESTAMP);
 
+export function captureMainframeScreenshots(screens: string, accountNumber: string): void {
+  const trimmedScreens = screens?.trim();
+  const trimmedAccount = accountNumber?.trim();
 
-package com.yourpackage.runner;
+  if (!trimmedScreens) {
+    console.log("[Screenshot] Screens column is empty — skipping capture.");
+    return;
+  }
+  if (!trimmedAccount) {
+    throw new Error("[Screenshot] Account Number is required but was empty.");
+  }
 
-import com.yourpackage.capture.ScreenshotCapture;
-import com.yourpackage.word.WordScreenshotWriter;
-import com.yourpackage.mainframe.MainframeNavigator;
+  fs.mkdirSync(RUN_OUTPUT_DIR, { recursive: true });
 
-public class ScreenshotOrchestrator {
+  console.log(`[Screenshot] Triggering BAT for screens: ${trimmedScreens}, account: ${trimmedAccount}`);
+  console.log(`[Screenshot] Output directory: ${RUN_OUTPUT_DIR}`);
 
-    private final String outputDir;
+  // IMPORTANT: when the BAT path itself contains spaces, cmd.exe /c needs
+  // the ENTIRE command line wrapped as one quoted string, not separate
+  // array elements — otherwise cmd.exe mis-parses the quoted path.
+  const commandLine = `"${BAT_FILE_PATH}" "${trimmedScreens}" "${trimmedAccount}" "${RUN_OUTPUT_DIR}"`;
 
-    public ScreenshotOrchestrator(String outputDir) {
-        this.outputDir = outputDir;
-    }
+  const result = spawnSync("cmd.exe", ["/c", commandLine], {
+    stdio: "inherit",
+    encoding: "utf-8",
+    shell: false,
+  });
 
-    public boolean runForScreens(String[] screens) {
-        MainframeNavigator navigator = new MainframeNavigator();
+  if (result.error) {
+    throw new Error(`[Screenshot] Failed to spawn BAT process: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[Screenshot] BAT process exited with code ${result.status}. Screens: ${trimmedScreens}, Account: ${trimmedAccount}`
+    );
+  }
 
-        try {
-            ScreenshotCapture capture = new ScreenshotCapture(outputDir);
-            String docxFileName = "MainframeScreenshots_" + timestampFromOutputDir() + ".docx";
-            WordScreenshotWriter wordWriter =
-                    new WordScreenshotWriter(outputDir + "/" + docxFileName, "Mainframe Screenshot Report");
-
-            for (String screenName : screens) {
-                navigator.navigateTo(screenName);
-                String imagePath = capture.captureScreen(screenName);
-                wordWriter.addScreenshotSection(screenName, imagePath);
-            }
-
-            wordWriter.save();
-            return true;
-
-        } catch (Exception e) {
-            System.err.println("[Java] ERROR: " + e.getMessage());
-            e.printStackTrace();
-            return false;
-        }
-    }
-
-    private String timestampFromOutputDir() {
-        String[] parts = outputDir.replace("\\", "/").split("/");
-        return parts[parts.length - 1];
-    }
+  console.log(`[Screenshot] Mainframe capture completed for: ${trimmedScreens}`);
 }
