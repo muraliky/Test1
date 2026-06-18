@@ -32,16 +32,11 @@ export function captureMainframeScreenshots(screens: string, accountNumber: stri
   console.log(`[Screenshot] Triggering BAT for screens: ${trimmedScreens}, account: ${trimmedAccount}`);
   console.log(`[Screenshot] Output directory: ${RUN_OUTPUT_DIR}`);
 
-  // IMPORTANT: when the BAT path itself contains spaces, cmd.exe /c needs
-  // the ENTIRE command line wrapped as one quoted string, not separate
-  // array elements — otherwise cmd.exe mis-parses the quoted path.
-  const commandLine = `"${BAT_FILE_PATH}" "${trimmedScreens}" "${trimmedAccount}" "${RUN_OUTPUT_DIR}"`;
-
-  const result = spawnSync("cmd.exe", ["/c", commandLine], {
-    stdio: "inherit",
-    encoding: "utf-8",
-    shell: false,
-  });
+  const result = spawnSync(
+    BAT_FILE_PATH,
+    [trimmedScreens, trimmedAccount, RUN_OUTPUT_DIR],
+    { stdio: "inherit", encoding: "utf-8", shell: true }
+  );
 
   if (result.error) {
     throw new Error(`[Screenshot] Failed to spawn BAT process: ${result.error.message}`);
